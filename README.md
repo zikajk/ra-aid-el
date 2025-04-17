@@ -1,8 +1,8 @@
 # ra-aid-el
 
-An Emacs interface for `ra-aid`, an AI-powered pair programming assistant.
+An Emacs interface for `ra-aid`, an open-source AI assistant that combines research, planning, and implementation to help you build software faster and smarter.
 
-For more information on the `ra-aid` tool itself, see the [official documentation](https://github.com/rafayal/ra-aid).
+For more information on the `ra-aid` tool itself, see the [official documentation](https://www.ra-aid.ai/).
 
 ## Installation
 
