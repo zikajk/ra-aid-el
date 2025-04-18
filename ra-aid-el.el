@@ -1,8 +1,8 @@
 ;;; ra-aid-el.el --- Interface for RA.Aid AI coding assistant -*- lexical-binding: t; -*-
 
 ;; Author: Jakub Zika (Akiz) <zikajk@gmail.com>
-;; Version: 0.1
-;; Package-Requires: ((emacs "26.1") (transient "0.3.0") (project "0.9.0"))
+;; Version: 0.2.0
+;; Package-Requires: ((emacs "26.1") (transient "0.3.0"))
 ;; Keywords: ai tools development ra-aid
 ;; URL: https://github.com/zikajk/re-aid-emacs
 ;; SPDX-License-Identifier: Apache-2.0
@@ -16,7 +16,6 @@
 ;;; Code:
 
 (require 'transient)
-(require 'project)
 (require 'comint)
 (require 'cl-lib) ;; For cl-letf, cl-mapcan etc. if needed later
 
@@ -24,6 +23,9 @@
   "Emacs Lisp interface for the RA.Aid AI coding assistant."
   :group 'tools
   :group 'convenience)
+
+(defconst ra-aid-el-provider-list
+  '("antropic" "deepseek" "fireworks" "gemini" "groq" "ollama" "openrouter" "openai" "openai-compatible"))
 
 (defcustom ra-aid-el-program "ra-aid"
   "The name or path of the ra-aid program."
@@ -42,7 +44,9 @@
 
 ;; --- Basic Settings ---
 
-(defcustom ra-aid-el-temperature 1.0
+(defconst ra-aid-el-temperature-default nil)
+
+(defcustom ra-aid-el-temperature ra-aid-el-temperature-default
   "LLM temperature setting (corresponds to --temperature)."
   :type 'float
   :group 'ra-aid-el)
@@ -100,20 +104,30 @@
   :group 'ra-aid-el)
 
 ;; --- Numeric Settings ---
+(defconst ra-aid-el-recursion-limit-default 100)
 
-(defcustom ra-aid-el-recursion-limit 100
+(defcustom ra-aid-el-recursion-limit ra-aid-el-recursion-limit-default
   "Maximum recursion depth for the agent (corresponds to --recursion-limit)."
   :type 'integer
   :group 'ra-aid-el)
 
-(defcustom ra-aid-el-max-test-cmd-retries 3
+(defconst ra-aid-el-max-test-cmd-retries-default 3)
+
+(defcustom ra-aid-el-max-test-cmd-retries ra-aid-el-max-test-cmd-retries-default
   "Maximum number of retries for the test command (corresponds to --max-test-cmd-retries)."
   :type 'integer
   :group 'ra-aid-el)
 
-(defcustom ra-aid-el-test-cmd-timeout 300
+(defconst ra-aid-el-test-cmd-timeout-default 300)
+
+(defcustom ra-aid-el-test-cmd-timeout ra-aid-el-test-cmd-timeout-default
   "Timeout in seconds for the test command (corresponds to --test-cmd-timeout)."
   :type 'integer
+  :group 'ra-aid-el)
+
+(defcustom ra-aid-el-custom-tools-path ""
+  "Path to custom python tools."
+  :type 'string
   :group 'ra-aid-el)
 
 ;; --- Boolean Toggles ---
@@ -178,10 +192,7 @@
   :type 'boolean
   :group 'ra-aid-el)
 
-
 ;; --- End of Defcustom ---
-
-
 
 (defun ra-aid-el--project-root ()
   "Get the project root using VC-git, or fallback to default-directory."
@@ -201,7 +212,7 @@
   (append (list "--provider" ra-aid-el-provider
                 "--model" ra-aid-el-model)
           ;; Add temperature if not default 1.0
-          (when (/= ra-aid-el-temperature 1.0)
+          (when (numberp ra-aid-el-temperature)
             (list "--temperature" (format "%f" ra-aid-el-temperature)))
           ;; Add log-level if not default "INFO"
           (unless (string= ra-aid-el-log-level "INFO")
@@ -212,6 +223,9 @@
           ;; Add test-cmd if set and not empty
           (unless (string-empty-p ra-aid-el-test-cmd)
             (list "--test-cmd" ra-aid-el-test-cmd))
+	  ;; Add custom path to tools
+	  (unless (string-empty-p ra-aid-el-custom-tools-path)
+	    (list "--custom-tools" ra-aid-el-custom-tools-path))
           ;; Per-agent provider/model settings
           (unless (string-empty-p ra-aid-el-research-provider)
             (list "--research-provider" ra-aid-el-research-provider))
@@ -226,11 +240,11 @@
           (unless (string-empty-p ra-aid-el-expert-model)
             (list "--expert-model" ra-aid-el-expert-model))
           ;; Numerical settings if not default
-          (unless (= ra-aid-el-recursion-limit 100)
+          (unless (= ra-aid-el-recursion-limit ra-aid-el-recursion-limit-default)
             (list "--recursion-limit" (format "%d" ra-aid-el-recursion-limit)))
-          (unless (= ra-aid-el-max-test-cmd-retries 3)
+          (unless (= ra-aid-el-max-test-cmd-retries ra-aid-el-max-test-cmd-retries-default)
             (list "--max-test-cmd-retries" (format "%d" ra-aid-el-max-test-cmd-retries)))
-          (unless (= ra-aid-el-test-cmd-timeout 300)
+          (unless (= ra-aid-el-test-cmd-timeout ra-aid-el-test-cmd-timeout-default)
             (list "--test-cmd-timeout" (format "%d" ra-aid-el-test-cmd-timeout)))
           ;; Boolean toggles
           (when ra-aid-el-use-aider '("--use-aider"))
@@ -249,23 +263,17 @@
 (defun ra-aid-el--run-ra-aid (prompt)
   "Run ra-aid with the given PROMPT and current settings.
 Uses `make-comint` to run the process in a dedicated buffer."
-  (interactive "sRA.Aid Task: ") ; Prompt the user if called directly
+  (interactive "sRA.Aid Task: ")
   (let* ((project-root (ra-aid-el--project-root))
          (buffer-name (ra-aid-el--get-buffer-name "task"))
-         ;; Build the command list dynamically based on settings
          (command (append (ra-aid-el--build-common-args)
-                          ;; Finally, the prompt
                           (list "-m" prompt)))
-         ;; Ensure comint runs in the correct directory
          (default-directory project-root))
 
     (message "Running RA.Aid in %s: %s %s" project-root ra-aid-el-program (string-join command " "))
-    ;; Create or reuse the comint buffer
     (let ((buffer (apply #'make-comint buffer-name ra-aid-el-program nil command)))
       (with-current-buffer buffer
-        ;; Optional: Add mode-specific settings here if needed later
-        (setq-local comint-process-echoes t) ; Often useful for interactive CLIs
-        )
+        (setq-local comint-process-echoes t))
       (display-buffer buffer))))
 
 (defun ra-aid-el--run-chat ()
@@ -297,7 +305,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the RA.Aid provider."
   (interactive
    (list (completing-read (format "Provider (%s): " ra-aid-el-provider)
-                          '("Anthropic" "DeepSeek" "Fireworks" "Gemini" "OpenRouter" "OpenAI-compatible" "Ollama")
+                          ra-aid-el-provider-list
                           nil t nil nil ra-aid-el-provider)))
   (customize-set-variable 'ra-aid-el-provider provider)
   (message "RA.Aid provider set to: %s" provider))
@@ -306,17 +314,29 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the RA.Aid model."
   (interactive
    (list (read-string (format "Model (%s): " ra-aid-el-model)
-                      nil nil ra-aid-el-model)))
+                      ra-aid-el-model nil nil)))
   (customize-set-variable 'ra-aid-el-model model)
   (message "RA.Aid model set to: %s" model))
 
-(defun ra-aid-el-set-temperature (temp)
-  "Set the RA.Aid temperature."
-  (interactive
-   (list (read-number (format "Temperature (current: %.1f): " ra-aid-el-temperature)
-                      ra-aid-el-temperature)))
-  (customize-set-variable 'ra-aid-el-temperature temp)
-  (message "RA.Aid temperature set to: %.1f" temp))
+(defun ra-aid-el-set-temperature ()
+  "Set the RA.Aid temperature. Empty input clears the value."
+  (interactive)
+  (let* ((current-val ra-aid-el-temperature)
+         (prompt (format "Temperature [%s]: "
+                         (if current-val (format "%.1f" current-val) "unset")))
+         (initial-input (if current-val (format "%.1f" current-val) ""))
+         (input-str (read-string prompt initial-input nil nil)))
+    (let ((new-val
+           (cond
+            ((string-empty-p input-str) nil)
+            (t (let ((num (ignore-errors (string-to-number input-str))))
+                 (unless (numberp num)
+                   (error "Invalid numeric input: %s" input-str)
+		   nil)
+                 num)))))
+      (customize-set-variable 'ra-aid-el-temperature new-val)
+      (message "RA.Aid temperature set to: %s"
+               (if new-val (format "%.1f" new-val) "unset")))))
 
 (defun ra-aid-el-set-log-level (level)
   "Set the RA.Aid log level."
@@ -340,10 +360,19 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the RA.Aid test command."
   (interactive
    (list (read-string (format "Test Command (%s): " (if (string-empty-p ra-aid-el-test-cmd) "<unset>" ra-aid-el-test-cmd))
-                      nil nil ra-aid-el-test-cmd)))
+                      ra-aid-el-test-cmd nil nil)))
   ;; Ensure empty input results in an empty string, not nil
   (customize-set-variable 'ra-aid-el-test-cmd (if (string-empty-p cmd) "" cmd))
   (message "RA.Aid test command set to: %s" (if (string-empty-p ra-aid-el-test-cmd) "<unset>" ra-aid-el-test-cmd)))
+
+(defun ra-aid-el-set-custom-tools-path (path)
+  "Set the RA.Aid custom tools path."
+  (interactive
+   (list (read-string (format "Path (%s): " (if (string-empty-p ra-aid-el-custom-tools-path) "<unset>" ra-aid-el-custom-tools-path))
+		      ra-aid-el-custom-tools-path
+		      nil nil)))
+  (customize-set-variable 'ra-aid-el-custom-tools-path path)
+  (message "RA.Aid custom tools path set to: %s" path))
 
 
 ;; --- Setters for Agent-Specific Models/Providers ---
@@ -352,7 +381,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the Research agent provider."
   (interactive
    (list (completing-read (format "Research Provider (%s): " (if (string-empty-p ra-aid-el-research-provider) "<default>" ra-aid-el-research-provider))
-                          (cons "<default>" '("DeepSeek" "Fireworks" "OpenRouter" "OpenAI-compatible" "Anthropic" "Gemini" "Ollama"))
+                          (cons "<default>" ra-aid-el-provider-list)
                           nil t nil nil (if (string-empty-p ra-aid-el-research-provider) "<default>" ra-aid-el-research-provider))))
   (let ((selected-provider provider))
     (if (string= selected-provider "<default>")
@@ -364,7 +393,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the Research agent model."
   (interactive
    (list (read-string (format "Research Model (%s): " (if (string-empty-p ra-aid-el-research-model) "<default>" ra-aid-el-research-model))
-                      nil nil ra-aid-el-research-model)))
+                      ra-aid-el-research-model nil nil)))
   (customize-set-variable 'ra-aid-el-research-model (if (string-empty-p model) "" model))
   (message "RA.Aid Research model set to: %s" (if (string-empty-p ra-aid-el-research-model) "<default>" ra-aid-el-research-model)))
 
@@ -372,7 +401,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the Planner agent provider."
   (interactive
    (list (completing-read (format "Planner Provider (%s): " (if (string-empty-p ra-aid-el-planner-provider) "<default>" ra-aid-el-planner-provider))
-                          (cons "<default>" '("DeepSeek" "Fireworks" "OpenRouter" "OpenAI-compatible" "Anthropic" "Gemini" "Ollama"))
+                          (cons "<default>" ra-aid-el-provider-list)
                           nil t nil nil (if (string-empty-p ra-aid-el-planner-provider) "<default>" ra-aid-el-planner-provider))))
   (let ((selected-provider provider))
     (if (string= selected-provider "<default>")
@@ -384,7 +413,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the Planner agent model."
   (interactive
    (list (read-string (format "Planner Model (%s): " (if (string-empty-p ra-aid-el-planner-model) "<default>" ra-aid-el-planner-model))
-                      nil nil ra-aid-el-planner-model)))
+                      ra-aid-el-planner-model nil nil)))
   (customize-set-variable 'ra-aid-el-planner-model (if (string-empty-p model) "" model))
   (message "RA.Aid Planner model set to: %s" (if (string-empty-p ra-aid-el-planner-model) "<default>" ra-aid-el-planner-model)))
 
@@ -392,7 +421,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the Expert agent provider."
   (interactive
    (list (completing-read (format "Expert Provider (%s): " (if (string-empty-p ra-aid-el-expert-provider) "<default>" ra-aid-el-expert-provider))
-                          (cons "<default>" '("DeepSeek" "Fireworks" "OpenRouter" "OpenAI-compatible" "Anthropic" "Gemini" "Ollama"))
+                          (cons "<default>" ra-aid-el-provider-list)
                           nil t nil nil (if (string-empty-p ra-aid-el-expert-provider) "<default>" ra-aid-el-expert-provider))))
   (let ((selected-provider provider))
     (if (string= selected-provider "<default>")
@@ -404,7 +433,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   "Set the Expert agent model."
   (interactive
    (list (read-string (format "Expert Model (%s): " (if (string-empty-p ra-aid-el-expert-model) "<default>" ra-aid-el-expert-model))
-                      nil nil ra-aid-el-expert-model)))
+                      ra-aid-el-expert-model nil nil)))
   (customize-set-variable 'ra-aid-el-expert-model (if (string-empty-p model) "" model))
   (message "RA.Aid Expert model set to: %s" (if (string-empty-p ra-aid-el-expert-model) "<default>" ra-aid-el-expert-model)))
 
@@ -413,24 +442,24 @@ Uses `make-comint` to run the process in a dedicated buffer."
 (defun ra-aid-el-set-recursion-limit (limit)
   "Set the RA.Aid recursion limit."
   (interactive
-   (list (read-number (format "Recursion Limit (current: %d, default: 100): " ra-aid-el-recursion-limit)
-                      ra-aid-el-recursion-limit)))
+   (list (read-number (format "Recursion Limit (current %d): " ra-aid-el-recursion-limit)
+                      ra-aid-el-recursion-limit-default)))
   (customize-set-variable 'ra-aid-el-recursion-limit limit)
   (message "RA.Aid recursion limit set to: %d" limit))
 
 (defun ra-aid-el-set-max-test-cmd-retries (retries)
   "Set the RA.Aid max test command retries."
   (interactive
-   (list (read-number (format "Max Test Retries (current: %d, default: 3): " ra-aid-el-max-test-cmd-retries)
-                      ra-aid-el-max-test-cmd-retries)))
+   (list (read-number (format "Max Test Retries (current: %d): " ra-aid-el-max-test-cmd-retries)
+                      ra-aid-el-max-test-cmd-retries-default)))
   (customize-set-variable 'ra-aid-el-max-test-cmd-retries retries)
   (message "RA.Aid max test retries set to: %d" retries))
 
 (defun ra-aid-el-set-test-cmd-timeout (timeout)
   "Set the RA.Aid test command timeout."
   (interactive
-   (list (read-number (format "Test Timeout (seconds, current: %d, default: 300): " ra-aid-el-test-cmd-timeout)
-                      ra-aid-el-test-cmd-timeout)))
+   (list (read-number (format "Test Timeout (current: %d): " ra-aid-el-test-cmd-timeout)
+                      ra-aid-el-test-cmd-timeout-default)))
   (customize-set-variable 'ra-aid-el-test-cmd-timeout timeout)
   (message "RA.Aid test command timeout set to: %d seconds" timeout))
 
@@ -522,16 +551,21 @@ Uses `make-comint` to run the process in a dedicated buffer."
      :description (lambda () (format "Model: %s" (propertize ra-aid-el-model 'face 'bold))))
     ("-e" "Set Temperature" ra-aid-el-set-temperature
      :transient t
-     :description (lambda () (format "Temp: %s" (propertize (format "%.1f" ra-aid-el-temperature) 'face 'bold))))
+     :description (lambda () (format "Temp: %s" (propertize (if (numberp ra-aid-el-temperature)
+								(format "%.1f" ra-aid-el-temperature)
+							        "None") 'face 'bold))))
     ("-L" "Set Log Level" ra-aid-el-set-log-level
      :transient t
      :description (lambda () (format "Log Lvl: %s" (propertize ra-aid-el-log-level 'face 'bold))))
     ("-g" "Set Log Mode" ra-aid-el-set-log-mode
      :transient t
      :description (lambda () (format "Log Mode: %s" (propertize ra-aid-el-log-mode 'face 'bold))))
-    ("-T" "Set Test Cmd" ra-aid-el-set-test-cmd ;; Changed keybind from -c
+    ("-T" "Set Test Cmd" ra-aid-el-set-test-cmd
      :transient t
      :description (lambda () (format "Test Cmd: %s" (propertize (if (string-empty-p ra-aid-el-test-cmd) "None" "Set") 'face 'bold))))
+    ("-t" "Set Custom Tools Path" ra-aid-el-set-custom-tools-path
+     :transient t
+     :description (lambda () (format "Custom Tools Path: %s" (propertize (if (string-empty-p ra-aid-el-custom-tools-path) "None" "Set") 'face 'bold))))
     ;; Agent-specific settings
     ("-r" "Research Provider" ra-aid-el-set-research-provider
      :transient t
