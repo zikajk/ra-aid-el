@@ -299,6 +299,13 @@ Uses `make-comint` to run the process in a dedicated buffer."
         )
       (display-buffer buffer))))
 
+(defun ra-aid-el-inspect-project-memory ()
+  "Opens RA.Aid project memory / db via sqlite-mode."
+  (interactive)
+  (let* ((project-root (ra-aid-el--project-root)))
+    (message "Displaying RA.Aid memory.")
+    (sqlite-mode-open-file (concat project-root ".ra-aid/pk.db"))))
+
 ;; --- Interactive Setters ---
 
 (defun ra-aid-el-set-provider (provider)
@@ -615,9 +622,6 @@ Uses `make-comint` to run the process in a dedicated buffer."
     ("t" "Auto Test" ra-aid-el-toggle-auto-test
      :transient t
      :description (lambda () (format "Auto Test: %s" (propertize (if ra-aid-el-auto-test "ON" "OFF") 'face 'bold))))
-    ("W" "Wipe Memory" ra-aid-el-toggle-wipe-project-memory
-     :transient t
-     :description (lambda () (format "Wipe Memory: %s" (propertize (if ra-aid-el-wipe-project-memory "ON" "OFF") 'face 'bold))))
     ("o" "Show Thoughts" ra-aid-el-toggle-show-thoughts
      :transient t
      :description (lambda () (format "Show Thoughts: %s" (propertize (if ra-aid-el-show-thoughts "ON" "OFF") 'face 'bold))))
@@ -634,6 +638,11 @@ Uses `make-comint` to run the process in a dedicated buffer."
      :transient t
      :description (lambda () (format "Disable Tokens: %s" (propertize (if ra-aid-el-disable-limit-tokens "ON" "OFF") 'face 'bold))))
     ]
+   ["Memory" ;; Group for memory flags and actions
+    ("W" "Wipe Memory" ra-aid-el-toggle-wipe-project-memory
+     :transient t
+     :description (lambda () (format "Wipe Memory: %s" (propertize (if ra-aid-el-wipe-project-memory "ON" "OFF") 'face 'bold))))
+    ("s" "Show Project Memory" ra-aid-el-inspect-project-memory)]
    ["Actions" ;; Group for actions
     ("r" "Run with Prompt" ra-aid-el--run-ra-aid)
     ("c" "Chat" ra-aid-el--run-chat)]]) ;; Added Chat action
