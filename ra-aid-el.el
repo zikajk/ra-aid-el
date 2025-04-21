@@ -25,7 +25,25 @@
   :group 'convenience)
 
 (defconst ra-aid-el-provider-list
-  '("antropic" "deepseek" "fireworks" "gemini" "groq" "ollama" "openrouter" "openai" "openai-compatible"))
+  '("anthropic" "deepseek" "fireworks" "gemini" "groq" "ollama" "openrouter" "openai" "openai-compatible"))
+
+(defcustom ra-aid-el-provider-models
+  '("anthropic" ("claude-3-opus-20240229" "claude-3-sonnet-20240229" "claude-3-haiku-20240307" "claude-3-5-sonnet-20240620")
+    "openai" ("gpt-4o" "gpt-4-turbo" "gpt-3.5-turbo")
+    "gemini" ("gemini-1.5-pro-latest" "gemini-1.5-flash-latest") ;; Assuming 'google' is the provider key
+    "ollama" ("llama3" "codellama" "mistral" "mixtral") ;; Example ollama models
+    "deepseek" ("deepseek-chat" "deepseek-coder")
+    "fireworks" ("accounts/fireworks/models/firefunction-v1")
+    "groq" ("llama3-8b-8192" "llama3-70b-8192" "mixtral-8x7b-32768" "gemma-7b-it")
+    "openrouter"  ("google/gemini-flash-1.5" "anthropic/claude-3.5-sonnet" "openai/gpt-4o" "mistralai/mistral-large") ;; Example OpenRouter models
+    "openai-compatible" ("mistral-large" "codestral-latest")) ;; Example compatible models
+  "An property list mapping provider names to lists of supported models.
+Used by `ra-aid-el-set-model` to offer relevant completions.
+Provider names should match entries in `ra-aid-el-provider-list`.
+If a provider is not found here, `ra-aid-el-set-model` will fall back to free-form input."
+  :type '(plist :key-type string :value-type (repeat string))
+  :group 'ra-aid-el)
+
 
 (defcustom ra-aid-el-program "ra-aid"
   "The name or path of the ra-aid program."
@@ -34,12 +52,12 @@
 
 (defcustom ra-aid-el-provider "anthropic"
   "Default LLM provider to use for RA.Aid."
-  :type 'string ;; Later, we can make this a choice
+  :type `(choice ,@(mapcar (lambda (p) `(const :tag ,(capitalize p) ,p)) ra-aid-el-provider-list)) ;; Use choice based on list
   :group 'ra-aid-el)
 
 (defcustom ra-aid-el-model "claude-3-5-sonnet-20240620"
-  "Default LLM model name to use for RA.Aid."
-  :type 'string ;; Later, we can make this a choice
+  "Default LLM model name to use for RA.Aid. Set via `ra-aid-el-set-model`."
+  :type 'string
   :group 'ra-aid-el)
 
 ;; --- Basic Settings ---
@@ -48,7 +66,7 @@
 
 (defcustom ra-aid-el-temperature ra-aid-el-temperature-default
   "LLM temperature setting (corresponds to --temperature)."
-  :type 'float
+  :type '(or null float) ;; Allow null to represent unset
   :group 'ra-aid-el)
 
 (defcustom ra-aid-el-log-level "INFO"
@@ -211,7 +229,7 @@
   "Build the common command-line arguments based on settings."
   (append (list "--provider" ra-aid-el-provider
                 "--model" ra-aid-el-model)
-          ;; Add temperature if not default 1.0
+          ;; Add temperature if set (and not nil)
           (when (numberp ra-aid-el-temperature)
             (list "--temperature" (format "%f" ra-aid-el-temperature)))
           ;; Add log-level if not default "INFO"
@@ -318,10 +336,17 @@ Uses `make-comint` to run the process in a dedicated buffer."
   (message "RA.Aid provider set to: %s" provider))
 
 (defun ra-aid-el-set-model (model)
-  "Set the RA.Aid model."
+  "Set the RA.Aid model, completing based on the current provider's list in `ra-aid-el-provider-models`."
   (interactive
-   (list (read-string (format "Model (%s): " ra-aid-el-model)
-                      ra-aid-el-model nil nil)))
+   (let* ((current-provider ra-aid-el-provider)
+          (model-list (plist-get ra-aid-el-provider-models
+				 current-provider
+				 'equal))
+          (prompt (format "Model for %s (Current: %s): "
+                          current-provider
+                          (propertize (or ra-aid-el-model "<unset>") 'face 'bold))))
+     (list
+      (completing-read prompt model-list nil nil nil nil ra-aid-el-model))))
   (customize-set-variable 'ra-aid-el-model model)
   (message "RA.Aid model set to: %s" model))
 
@@ -387,14 +412,23 @@ Uses `make-comint` to run the process in a dedicated buffer."
 (defun ra-aid-el-set-research-provider (provider)
   "Set the Research agent provider."
   (interactive
-   (list (completing-read (format "Research Provider (%s): " (if (string-empty-p ra-aid-el-research-provider) "<default>" ra-aid-el-research-provider))
-                          (cons "<default>" ra-aid-el-provider-list)
-                          nil t nil nil (if (string-empty-p ra-aid-el-research-provider) "<default>" ra-aid-el-research-provider))))
+   (list (completing-read
+	  (format "Research Provider (%s): "
+		  (if (string-empty-p ra-aid-el-research-provider)
+		      "<default>"
+		    ra-aid-el-research-provider))
+          (cons "<default>" ra-aid-el-provider-list)
+          nil t nil nil (if (string-empty-p ra-aid-el-research-provider)
+			    "<default>"
+			  ra-aid-el-research-provider))))
   (let ((selected-provider provider))
     (if (string= selected-provider "<default>")
         (customize-set-variable 'ra-aid-el-research-provider "")
       (customize-set-variable 'ra-aid-el-research-provider selected-provider))
-    (message "RA.Aid Research provider set to: %s" (if (string-empty-p ra-aid-el-research-provider) "<default>" ra-aid-el-research-provider))))
+    (message "RA.Aid Research provider set to: %s"
+	     (if (string-empty-p ra-aid-el-research-provider)
+		 "<default>"
+	       ra-aid-el-research-provider))))
 
 (defun ra-aid-el-set-research-model (model)
   "Set the Research agent model."
