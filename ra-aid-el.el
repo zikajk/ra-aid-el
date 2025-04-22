@@ -1,7 +1,7 @@
 ;;; ra-aid-el.el --- Interface for RA.Aid AI coding assistant -*- lexical-binding: t; -*-
 
 ;; Author: Jakub Zika (Akiz) <zikajk@gmail.com>
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "26.1") (transient "0.3.0"))
 ;; Keywords: ai tools development ra-aid
 ;; URL: https://github.com/zikajk/re-aid-emacs
@@ -11,12 +11,14 @@
 ;; Provides an Emacs Lisp interface for the RA.Aid AI coding assistant.
 ;; Allows configuring RA.Aid options via a transient menu and running
 ;; tasks or chat sessions within the current project context, displaying output in a
-;; comint buffer.
+;; comint buffer or optionally a vterm buffer (if the 'vterm' package is installed
+;; and configured via `ra-aid-el-terminal-backend`).
 
 ;;; Code:
 
 (require 'transient)
 (require 'comint)
+(require 'vterm nil t)
 (require 'cl-lib) ;; For cl-letf, cl-mapcan etc. if needed later
 
 (defgroup ra-aid-el nil
@@ -210,6 +212,12 @@ If a provider is not found here, `ra-aid-el-set-model` will fall back to free-fo
   :type 'boolean
   :group 'ra-aid-el)
 
+(defcustom ra-aid-el-terminal-backend 'comint
+  "Terminal backend to use for running RA.Aid processes."
+  :type '(choice (const :tag "Comint (Built-in)" comint)
+                 (const :tag "Vterm (Requires vterm package)" vterm))
+  :group 'ra-aid-el)
+
 ;; --- End of Defcustom ---
 
 (defun ra-aid-el--project-root ()
@@ -278,44 +286,57 @@ If a provider is not found here, `ra-aid-el-set-model` will fall back to free-fo
           (when ra-aid-el-experimental-fallback-handler '("--experimental-fallback-handler"))
           (when ra-aid-el-disable-limit-tokens '("--disable-limit-tokens"))))
 
+(defun ra-aid-el--start-process-in-terminal (buffer-name program args)
+  "Start PROGRAM with ARGS in BUFFER-NAME using the chosen backend.
+Returns the process buffer."
+  (let ((default-directory (ra-aid-el--project-root)))
+    (cond
+     ;; --- Comint Backend ---
+     ((eq ra-aid-el-terminal-backend 'comint)
+      (let ((buffer (apply #'make-comint buffer-name program nil args)))
+        (with-current-buffer buffer
+          (setq-local comint-process-echoes t))
+        buffer))
+
+     ;; --- Vterm Backend ---
+     ((eq ra-aid-el-terminal-backend 'vterm)
+      (unless (featurep 'vterm)
+        (error "Vterm backend selected, but 'vterm' package is not available"))
+      (let* ((vterm-buffer (get-buffer-create (concat "*" buffer-name "*")))
+             (command-string (mapconcat #'shell-quote-argument (cons program args) " ")))
+        (with-current-buffer vterm-buffer
+          (unless (eq major-mode 'vterm-mode)
+            (vterm-mode))
+          (vterm-send-string command-string)
+          (vterm-send-string "\n"))
+        vterm-buffer))
+     (t
+      (error "Unknown ra-aid-el-terminal-backend: %s" ra-aid-el-terminal-backend)))))
+
 (defun ra-aid-el--run-ra-aid (prompt)
   "Run ra-aid with the given PROMPT and current settings.
-Uses `make-comint` to run the process in a dedicated buffer."
+Uses chosen terminal backend to run the process in a dedicated buffer."
   (interactive "sRA.Aid Task: ")
-  (let* ((project-root (ra-aid-el--project-root))
+  (let* ((project-root (ra-aid-el--project-root)) ; Keep project-root for message
          (buffer-name (ra-aid-el--get-buffer-name "task"))
          (command (append (ra-aid-el--build-common-args nil)
-                          (list "-m" prompt)))
-         (default-directory project-root))
+                          (list "-m" prompt))))
 
     (message "Running RA.Aid in %s: %s %s" project-root ra-aid-el-program (string-join command " "))
-    (let ((buffer (apply #'make-comint buffer-name ra-aid-el-program nil command)))
-      (with-current-buffer buffer
-        (setq-local comint-process-echoes t))
+    (let ((buffer (ra-aid-el--start-process-in-terminal buffer-name ra-aid-el-program command)))
       (display-buffer buffer))))
 
 (defun ra-aid-el--run-chat ()
   "Run ra-aid in chat mode with current settings.
-Uses `make-comint` to run the process in a dedicated buffer."
-  ;; This function is not interactive, called from the transient menu.
+Uses chosen terminal backend to run the process in a dedicated buffer."
   (interactive)
-  (let* ((project-root (ra-aid-el--project-root))
+  (let* ((project-root (ra-aid-el--project-root)) ; Keep project-root for message
          (buffer-name (ra-aid-el--get-buffer-name "chat"))
-         ;; Build the command list dynamically based on settings
-         (command (append (ra-aid-el--build-common-args true)
-                          ;; Always add the --chat flag
          (command (append (ra-aid-el--build-common-args t)
-                          '("--chat")))
-         ;; Ensure comint runs in the correct directory
-         (default-directory project-root))
+                          '("--chat"))))
 
     (message "Starting RA.Aid Chat in %s: %s %s" project-root ra-aid-el-program (string-join command " "))
-    ;; Create or reuse the comint buffer
-    (let ((buffer (apply #'make-comint buffer-name ra-aid-el-program nil command)))
-      (with-current-buffer buffer
-        ;; Optional: Add mode-specific settings here if needed later
-        (setq-local comint-process-echoes t) ; Often useful for interactive CLIs
-        )
+    (let ((buffer (ra-aid-el--start-process-in-terminal buffer-name ra-aid-el-program command)))
       (display-buffer buffer))))
 
 (defun ra-aid-el--send-to-chat (&optional process-buffer-name)
@@ -336,6 +357,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
 	(cond ((not process-buffer) (error "No such buffer: %s" process-buffer-name))
               ((not process) (error "No active process in %s" process-buffer-name))
               ((eq 'vterm-mode (buffer-local-value 'major-mode process-buffer))
+	       (pop-to-buffer process-buffer)
                (vterm-send-string prompt))
               (t (comint-send-string process-buffer prompt)
 		 (comint-send-string process-buffer "\n")
@@ -446,7 +468,6 @@ Uses `make-comint` to run the process in a dedicated buffer."
 		      nil nil)))
   (customize-set-variable 'ra-aid-el-custom-tools-path path)
   (message "RA.Aid custom tools path set to: %s" path))
-
 
 ;; --- Setters for Agent-Specific Models/Providers ---
 
