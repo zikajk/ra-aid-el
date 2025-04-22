@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-04-22
+
+### Added
+
+-   **Region/Buffer Actions:**
+    -   New command `ra-aid-el-send-region-or-buffer-as-prompt` ('g' in menu) to start a new task session using the selected text as the initial prompt.
+    -   New command `ra-aid-el-send-region-or-buffer-to-chat` ('b' in menu) to send selected text to an existing chat session. Includes fallback to interactive buffer selection if the default chat buffer isn't found.
+-   **Optional Vterm Backend:**
+    -   New custom variable `ra-aid-el-terminal-backend` ('comint' or 'vterm') to choose the terminal emulator. Requires separate installation of `vterm` package if selected.
+    -   Optional loading of `vterm` package added.
+    -   New internal helper `ra-aid-el--start-process-in-terminal` to manage backend process creation.
+-   **Model/Provider Improvements:**
+    -   New custom variable `ra-aid-el-provider-models` (property list) to define available models per provider.
+    -   `ra-aid-el-set-model` now offers model completions based on the current provider and the `ra-aid-el-provider-models` variable.
+-   **Project Memory Inspection:**
+    -   New command `ra-aid-el-inspect-project-memory` ('s' in menu) to open the project's `.ra-aid/pk.db` memory file using `sqlite-mode`.
+
+### Changed
+
+-   **Process Execution:**
+    -   Refactored `ra-aid-el--run-ra-aid` and `ra-aid-el--run-chat` to use the new terminal backend helper.
+    -   Refactored `ra-aid-el--build-common-args` to accept a `chatp` argument, allowing selective exclusion of arguments (e.g., `--research-only`) in chat mode.
+	-   `ra-aid-el--get-buffer-name` now generates base names *without* leading/trailing asterisks. The process starting logic consumes this base name, allowing the chosen backend (`comint` or `vterm`) to apply standard naming conventions (like adding asterisks, which `vterm` does not do by default).
+-   **Transient Menu:**
+    -   Renamed action 'c' description from "Chat" to "Start Chat".
+    -   Added new "Actions" group entries: 'g' ("Use region/buffer as Prompt") and 'b' ("Send region/buffer to Chat").
+    -   Added new "Memory" group containing "Show Project Memory" ('s') and the moved "Wipe Memory" ('W') toggle.
+-   **User Interaction:**
+    -   `ra-aid-el-provider` custom definition now uses `:type choice` for better widget integration.
+    -   Improved interactive prompt message in `ra-aid-el--send-to-chat`.
+    -   Buffer filtering for `ra-aid-el--send-to-chat` confirmed to work with both `comint` and `vterm` buffers.
+
+### Fixed
+
+-   Corrected provider name typo in internal list ("antropic" -> "anthropic").
+
 ## [0.2.0] - 2025-04-18
 
 ### Added
