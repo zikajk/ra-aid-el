@@ -223,9 +223,9 @@ If a provider is not found here, `ra-aid-el-set-model` will fall back to free-fo
   "Generate the ra-aid buffer name based on project root and BASE-NAME."
   (let* ((root (ra-aid-el--project-root))
          (project-name (file-name-nondirectory (directory-file-name root))))
-    (format "*ra-aid-el-%s:%s*" base-name (if (string-empty-p project-name) "default" project-name))))
+    (format "ra-aid-el-%s:%s" base-name (if (string-empty-p project-name) "default" project-name))))
 
-(defun ra-aid-el--build-common-args ()
+(defun ra-aid-el--build-common-args (chatp)
   "Build the common command-line arguments based on settings."
   (append (list "--provider" ra-aid-el-provider
                 "--model" ra-aid-el-model)
@@ -266,7 +266,7 @@ If a provider is not found here, `ra-aid-el-set-model` will fall back to free-fo
             (list "--test-cmd-timeout" (format "%d" ra-aid-el-test-cmd-timeout)))
           ;; Boolean toggles
           (when ra-aid-el-use-aider '("--use-aider"))
-          (when ra-aid-el-research-only '("--research-only"))
+          (when (and (not chatp) ra-aid-el-research-only) '("--research-only"))
           (when ra-aid-el-cowboy-mode '("--cowboy-mode"))
           (when ra-aid-el-hil '("--hil"))
           (when ra-aid-el-pretty-logger '("--pretty-logger"))
@@ -284,7 +284,7 @@ Uses `make-comint` to run the process in a dedicated buffer."
   (interactive "sRA.Aid Task: ")
   (let* ((project-root (ra-aid-el--project-root))
          (buffer-name (ra-aid-el--get-buffer-name "task"))
-         (command (append (ra-aid-el--build-common-args)
+         (command (append (ra-aid-el--build-common-args nil)
                           (list "-m" prompt)))
          (default-directory project-root))
 
@@ -302,8 +302,9 @@ Uses `make-comint` to run the process in a dedicated buffer."
   (let* ((project-root (ra-aid-el--project-root))
          (buffer-name (ra-aid-el--get-buffer-name "chat"))
          ;; Build the command list dynamically based on settings
-         (command (append (ra-aid-el--build-common-args)
+         (command (append (ra-aid-el--build-common-args true)
                           ;; Always add the --chat flag
+         (command (append (ra-aid-el--build-common-args t)
                           '("--chat")))
          ;; Ensure comint runs in the correct directory
          (default-directory project-root))
@@ -316,6 +317,46 @@ Uses `make-comint` to run the process in a dedicated buffer."
         (setq-local comint-process-echoes t) ; Often useful for interactive CLIs
         )
       (display-buffer buffer))))
+
+(defun ra-aid-el--send-to-chat (&optional process-buffer-name)
+  (interactive
+   (list (read-buffer "Send to CHAT buffer: "
+		      nil
+		      t
+		       #'(lambda (buf) (with-current-buffer (car buf)
+		       			(when (and (derived-mode-p 'comint-mode 'vterm-mode)
+		       				   (string-match-p "ra-aid-el-chat" (car buf)))
+		       			  buf))))))
+  (if (stringp process-buffer-name)
+      (let* ((process-buffer (get-buffer process-buffer-name))
+	     (process (get-buffer-process process-buffer))
+             (prompt (if (use-region-p)
+			 (buffer-substring-no-properties (region-beginning) (region-end))
+                       (buffer-substring-no-properties (point-min) (point-max)))))
+	(cond ((not process-buffer) (error "No such buffer: %s" process-buffer-name))
+              ((not process) (error "No active process in %s" process-buffer-name))
+              ((eq 'vterm-mode (buffer-local-value 'major-mode process-buffer))
+               (vterm-send-string prompt))
+              (t (comint-send-string process-buffer prompt)
+		 (comint-send-string process-buffer "\n")
+		 (pop-to-buffer process-buffer))))
+    (message "RA.Aid chat buffer has not been found!")))
+
+(defun ra-aid-el-send-region-or-buffer-to-chat ()
+  "Send active region (or whole buffer) to existing RA.Aid chat buffer."
+  (interactive)
+  (let ((buffer-name (concat "*" (ra-aid-el--get-buffer-name "chat") "*")))
+    (if (buffer-live-p (get-buffer buffer-name))
+	(ra-aid-el--send-to-chat buffer-name)
+      (call-interactively #'ra-aid-el--send-to-chat))))
+
+(defun ra-aid-el-send-region-or-buffer-as-prompt ()
+  "Send active region (or whole buffer) to process in PROCESS-BUFFER-NAME."
+  (interactive)
+  (let ((prompt (if (use-region-p)
+                    (buffer-substring-no-properties (region-beginning) (region-end))
+                  (buffer-substring-no-properties (point-min) (point-max)))))
+    (ra-aid-el--run-ra-aid prompt)))
 
 (defun ra-aid-el-inspect-project-memory ()
   "Opens RA.Aid project memory / db via sqlite-mode."
@@ -679,7 +720,9 @@ Uses `make-comint` to run the process in a dedicated buffer."
     ("s" "Show Project Memory" ra-aid-el-inspect-project-memory)]
    ["Actions" ;; Group for actions
     ("r" "Run with Prompt" ra-aid-el--run-ra-aid)
-    ("c" "Chat" ra-aid-el--run-chat)]]) ;; Added Chat action
+    ("g" "Use region or buffer as Prompt" ra-aid-el-send-region-or-buffer-as-prompt)
+    ("c" "Start Chat" ra-aid-el--run-chat)
+    ("b" "Send region or buffer to Chat" ra-aid-el-send-region-or-buffer-to-chat)]]) ;; Added Chat action
 
 ;;;###autoload
 (defun ra-aid-el-menu ()
