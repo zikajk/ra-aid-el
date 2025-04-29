@@ -398,6 +398,31 @@ Uses chosen terminal backend to run the process in a dedicated buffer."
   (customize-set-variable 'ra-aid-el-provider provider)
   (message "RA.Aid provider set to: %s" provider))
 
+(defun ra-aid-el--set-agent-model (agent-sym prompt &optional no-provider-p)
+  "Helper for setting agent models with provider-aware completion.
+AGENT-SYM is one of: 'research 'planner 'expert.
+PROMPT is the prompt string for completing-read.
+When NO-PROVIDER-P is non-nil, use provider set in main model."
+  (let* ((provider-var (intern (format "ra-aid-el-%s-provider" agent-sym)))
+         (model-var (intern (format "ra-aid-el-%s-model" agent-sym)))
+         (current-provider (if (or no-provider-p
+                                  (string-empty-p (symbol-value provider-var)))
+                              ra-aid-el-provider
+                            (symbol-value provider-var)))
+         (current-model (symbol-value model-var))
+         (model-list (plist-get ra-aid-el-provider-models current-provider 'equal))
+         (default-display (if (string-empty-p current-model)
+                             "<default>"
+                           current-model))
+         (prompt (format prompt (propertize default-display 'face 'bold)))
+         (selected (completing-read prompt
+                                   model-list
+                                   nil nil nil nil
+                                   (unless (string-empty-p current-model)
+                                     current-model))))
+    (customize-set-variable model-var (if (string-empty-p selected) "" selected))
+    (message "RA.Aid %s model set to: %s" agent-sym (if (string-empty-p selected) "<default>" selected))))
+
 (defun ra-aid-el-set-model (model)
   "Set the RA.Aid model, completing based on the current provider's list in `ra-aid-el-provider-models`."
   (interactive
@@ -492,13 +517,13 @@ Uses chosen terminal backend to run the process in a dedicated buffer."
 		 "<default>"
 	       ra-aid-el-research-provider))))
 
-(defun ra-aid-el-set-research-model (model)
-  "Set the Research agent model."
-  (interactive
-   (list (read-string (format "Research Model (%s): " (if (string-empty-p ra-aid-el-research-model) "<default>" ra-aid-el-research-model))
-                      ra-aid-el-research-model nil nil)))
-  (customize-set-variable 'ra-aid-el-research-model (if (string-empty-p model) "" model))
-  (message "RA.Aid Research model set to: %s" (if (string-empty-p ra-aid-el-research-model) "<default>" ra-aid-el-research-model)))
+(defun ra-aid-el-set-research-model ()
+  "Set the Research agent model with provider-aware completion."
+  (interactive)
+  (ra-aid-el--set-agent-model
+   'research
+   "Research Model (%s): "
+   (string-empty-p ra-aid-el-research-provider)))
 
 (defun ra-aid-el-set-planner-provider (provider)
   "Set the Planner agent provider."
@@ -512,13 +537,14 @@ Uses chosen terminal backend to run the process in a dedicated buffer."
       (customize-set-variable 'ra-aid-el-planner-provider selected-provider))
     (message "RA.Aid Planner provider set to: %s" (if (string-empty-p ra-aid-el-planner-provider) "<default>" ra-aid-el-planner-provider))))
 
-(defun ra-aid-el-set-planner-model (model)
-  "Set the Planner agent model."
-  (interactive
-   (list (read-string (format "Planner Model (%s): " (if (string-empty-p ra-aid-el-planner-model) "<default>" ra-aid-el-planner-model))
-                      ra-aid-el-planner-model nil nil)))
-  (customize-set-variable 'ra-aid-el-planner-model (if (string-empty-p model) "" model))
-  (message "RA.Aid Planner model set to: %s" (if (string-empty-p ra-aid-el-planner-model) "<default>" ra-aid-el-planner-model)))
+(defun ra-aid-el-set-planner-model ()
+  "Set the Planner agent model with provider-aware completion."
+  (interactive)
+  (ra-aid-el--set-agent-model
+   'planner
+   "Planner Model (%s): "
+   (string-empty-p ra-aid-el-planner-provider)))
+
 
 (defun ra-aid-el-set-expert-provider (provider)
   "Set the Expert agent provider."
@@ -532,13 +558,13 @@ Uses chosen terminal backend to run the process in a dedicated buffer."
       (customize-set-variable 'ra-aid-el-expert-provider selected-provider))
     (message "RA.Aid Expert provider set to: %s" (if (string-empty-p ra-aid-el-expert-provider) "<default>" ra-aid-el-expert-provider))))
 
-(defun ra-aid-el-set-expert-model (model)
-  "Set the Expert agent model."
-  (interactive
-   (list (read-string (format "Expert Model (%s): " (if (string-empty-p ra-aid-el-expert-model) "<default>" ra-aid-el-expert-model))
-                      ra-aid-el-expert-model nil nil)))
-  (customize-set-variable 'ra-aid-el-expert-model (if (string-empty-p model) "" model))
-  (message "RA.Aid Expert model set to: %s" (if (string-empty-p ra-aid-el-expert-model) "<default>" ra-aid-el-expert-model)))
+(defun ra-aid-el-set-expert-model ()
+  "Set the Expert agent model with provider-aware completion."
+  (interactive)
+  (ra-aid-el--set-agent-model
+   'expert
+   "Expert Model (%s): "
+   (string-empty-p ra-aid-el-expert-provider)))
 
 ;; --- Setters for Numeric Values ---
 
@@ -672,22 +698,31 @@ Uses chosen terminal backend to run the process in a dedicated buffer."
     ;; Agent-specific settings
     ("-r" "Research Provider" ra-aid-el-set-research-provider
      :transient t
-     :description (lambda () (format "Research Prov: %s" (propertize (if (string-empty-p ra-aid-el-research-provider) "Default" "Set") 'face 'bold))))
+     :description (lambda () (format "Research Prov: %s" (propertize (if (string-empty-p ra-aid-el-research-provider) "Default"
+								       (propertize ra-aid-el-research-provider 'face 'bold)) 'face 'bold))))
     ("-M" "Research Model" ra-aid-el-set-research-model
      :transient t
-     :description (lambda () (format "Research Mode: %s" (propertize (if (string-empty-p ra-aid-el-research-model) "Default" "Set") 'face 'bold))))
+     :description (lambda () (format "Research Model: %s" (propertize (if (string-empty-p ra-aid-el-research-model)
+									  "Default"
+									(propertize ra-aid-el-research-model 'face 'bold)) 'face 'bold))))
     ("-N" "Planner Provider" ra-aid-el-set-planner-provider ;; Changed keybind from -p
      :transient t
-     :description (lambda () (format "Planner Prov: %s" (propertize (if (string-empty-p ra-aid-el-planner-provider) "Default" "Set") 'face 'bold))))
+     :description (lambda () (format "Planner Prov: %s" (propertize (if (string-empty-p ra-aid-el-planner-provider) "Default"
+								      (propertize ra-aid-el-planner-provider 'face 'bold)) 'face 'bold))))
     ("-P" "Planner Model" ra-aid-el-set-planner-model
      :transient t
-     :description (lambda () (format "Planner Mode: %s" (propertize (if (string-empty-p ra-aid-el-planner-model) "Default" "Set") 'face 'bold))))
+     :description (lambda () (format "Planner Model: %s" (propertize (if (string-empty-p ra-aid-el-planner-model)
+									  "Default"
+									(propertize ra-aid-el-planner-model 'face 'bold)) 'face 'bold))))
     ("-x" "Expert Provider" ra-aid-el-set-expert-provider
      :transient t
-     :description (lambda () (format "Expert Prov: %s" (propertize (if (string-empty-p ra-aid-el-expert-provider) "Default" "Set") 'face 'bold))))
+     :description (lambda () (format "Expert Prov: %s" (propertize (if (string-empty-p ra-aid-el-expert-provider) "Default"
+								     (propertize ra-aid-el-expert-provider 'face 'bold)) 'face 'bold))))
     ("-X" "Expert Model" ra-aid-el-set-expert-model
      :transient t
-     :description (lambda () (format "Expert Mode: %s" (propertize (if (string-empty-p ra-aid-el-expert-model) "Default" "Set") 'face 'bold))))
+     :description (lambda () (format "Expert Model: %s" (propertize (if (string-empty-p ra-aid-el-planner-model)
+									  "Default"
+									(propertize ra-aid-el-expert-model 'face 'bold)) 'face 'bold))))
     ;; Numeric settings
     ("-l" "Rec Limit" ra-aid-el-set-recursion-limit
      :transient t
